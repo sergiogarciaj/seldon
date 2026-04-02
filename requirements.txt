@@ -1,0 +1,6 @@
+google-cloud-bigquery
+pandas
+db-dtypes
+google-auth-oauthlib
+python-dotenv
+tqdm

@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pydantic
+python-dotenv
+google-cloud-bigquery
+google-generativeai
+streamlit
+pandas
+requests
+db-dtypes

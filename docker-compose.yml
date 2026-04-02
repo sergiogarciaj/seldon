@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  bq-runner:
+    build: .
+    container_name: bq-runner
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Use interactive mode for auth_setup.py
+    stdin_open: true
+    tty: true
