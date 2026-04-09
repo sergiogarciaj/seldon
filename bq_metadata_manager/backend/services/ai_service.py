@@ -6,7 +6,7 @@ import json
 load_dotenv()
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-2.5-flash-lite')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 def generate_table_description(table_name: str, schema: list):
     prompt = f"""
@@ -45,6 +45,42 @@ def generate_sql_query(user_request: str, catalog: list):
     
     Solicitud del usuario:
     {user_request}
+    """
+    response = model.generate_content(prompt)
+    # Clean possible markdown artifacts
+    sql = response.text.strip().replace("```sql", "").replace("```", "")
+    return sql
+
+def refine_sql_query(current_sql: str, additional_instructions: str, catalog: list):
+    """
+    Refines an existing SQL query based on additional instructions.
+    """
+    catalog_context = "\n".join([
+        f"Tabla: `{t['full_id']}` (Referencia corta: {t['short_name']})\nDescripción: {t['description']}\nEsquema: {json.dumps(t['schema_json'])}"
+        for t in catalog
+    ])
+    
+    prompt = f"""
+    Eres un experto en SQL para Google BigQuery.
+    Tienes la siguiente consulta SQL actual y unas instrucciones adicionales del usuario para mejorarla.
+    
+    REGLAS CRÍTICAS:
+    - Solo devuelve la query SQL mejorada, nada más. No incluyas explicaciones ni bloques de código markdown extraños.
+    - Usa SIEMPRE los IDs completos de las tablas entre comillas invertidas (backticks), por ejemplo: `proyecto.dataset.tabla`.
+    - No uses dialectos de PostgreSQL; usa funciones y sintaxis estándar de BigQuery.
+    
+    Catálogo de tablas disponibles:
+    {catalog_context}
+    
+    Consulta SQL actual:
+    ```sql
+    {current_sql}
+    ```
+    
+    Instrucciones adicionales para mejorar la consulta:
+    {additional_instructions}
+    
+    Genera la consulta SQL mejorada:
     """
     response = model.generate_content(prompt)
     # Clean possible markdown artifacts

@@ -180,7 +180,7 @@ components.html(MATRIX_JS, height=0, width=0)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # Navigation Menu
-menu = ["[ SYS ] Inicio", "[ DATA ] Catálogo e Ingesta", "[ REGS ] Tablas Registradas", "[ NEUR ] Consultas Inteligentes"]
+menu = ["[ SYS ] Inicio", "[ DATA ] Catálogo e Ingesta", "[ REGS ] Tablas Registradas", "[ NEUR ] Consultas Inteligentes", "[ SAVE ] Consultas Guardadas"]
 choice = st.sidebar.radio("Navegación del Sistema", menu)
 
 # JS conditional for Matrix Rain on Home page only
@@ -248,7 +248,12 @@ elif "Catálogo" in choice:
                     st.error(f"Error al guardar: {save_resp.text}")
 
 # Smart Queries Module
-elif "Consultas" in choice:
+elif "NEUR" in choice:
+    # Check if we came from a redirect
+    if st.session_state.get('redirect_to_neur'):
+        st.session_state['redirect_to_neur'] = False
+        st.info("🔔 Consulta cargada desde 'Consultas Guardadas'. Puedes continuar refinándola aquí.")
+    
     st.header("[ NEUR ] Generar Queries con IA sobre el Catálogo")
     
     tables_resp = requests.get(f"{BACKEND_URL}/tables")
@@ -265,28 +270,115 @@ elif "Consultas" in choice:
                 with st.spinner("La IA está redactando la query..."):
                     gen_resp = requests.post(f"{BACKEND_URL}/queries/generate", json={"prompt": user_prompt})
                     if gen_resp.status_code == 200:
-                        st.session_state['generated_sql'] = gen_resp.json()['sql']
+                        generated_sql = gen_resp.json()['sql']
+                        st.session_state['generated_sql'] = generated_sql
+                        st.session_state['edited_sql'] = generated_sql
+                        st.session_state['sql_needs_update'] = True  # Flag to force editor update
                     else:
                         st.error(f"Error: {gen_resp.text}")
             
             if 'generated_sql' in st.session_state:
                 st.subheader("Query Generada (Revisión Requerida)")
-                sql_to_run = st.text_area("Revisa y ajusta la query si es necesario:", value=st.session_state['generated_sql'], height=200)
+                
+                # Determine which SQL to show in editor
+                sql_key = "sql_editor_content"
+                
+                # If we just refined/generated, use that value and clear the flag
+                if st.session_state.get('sql_needs_update'):
+                    current_sql = st.session_state.get('edited_sql') or st.session_state['generated_sql']
+                    st.session_state[sql_key] = current_sql
+                    st.session_state['sql_needs_update'] = False
+                elif sql_key in st.session_state:
+                    current_sql = st.session_state[sql_key]
+                else:
+                    current_sql = st.session_state.get('edited_sql') or st.session_state['generated_sql']
+                    st.session_state[sql_key] = current_sql
+                
+                sql_to_run = st.text_area(
+                    "Revisa y ajusta la query si es necesario:", 
+                    value=current_sql,
+                    height=200,
+                    key=sql_key
+                )
+                
+                # Save current value to edited_sql
+                st.session_state['edited_sql'] = sql_to_run
                 
                 target_table = st.text_input("Nombre de la tabla de resultados:", value="query_result_1")
                 
-                if st.button("[ EXEC ] Ejecutar y Guardar Resultados"):
-                    with st.spinner("[ TRANSMITTING TO BIGQUERY ... ]"):
-                        exec_resp = requests.post(
-                            f"{BACKEND_URL}/queries/execute", 
-                            params={"sql": sql_to_run, "target_table": target_table}
-                        )
-                        if exec_resp.status_code == 200:
-                            res = exec_resp.json()
-                            st.success(f"Éxito. Registros totales: {res['total_records']}")
-                            st.table(res['first_5'])
-                        else:
-                            st.error(f"Error de ejecución: {exec_resp.text}")
+                # Refinement section
+                st.divider()
+                st.subheader("[ ✨ ] Mejorar Consulta con IA")
+                refinement_instructions = st.text_area(
+                    "¿Qué cambios o mejoras necesitas?",
+                    placeholder="Ej: Agrega un filtro por fecha, ordena por total descendente, incluye solo registros activos...",
+                    height=80
+                )
+                
+                col_gen, col_exec = st.columns([1, 1])
+                
+                with col_gen:
+                    if st.button("[ 🔁 ] Refinar con IA", disabled=not refinement_instructions.strip()):
+                        with st.spinner("La IA está refinando la query..."):
+                            # Use the current edited SQL as base
+                            base_sql = st.session_state.get('edited_sql') or st.session_state['generated_sql']
+                            refine_resp = requests.post(
+                                f"{BACKEND_URL}/queries/refine",
+                                json={
+                                    "current_sql": base_sql,
+                                    "additional_instructions": refinement_instructions
+                                }
+                            )
+                            if refine_resp.status_code == 200:
+                                refined_sql = refine_resp.json()['sql']
+                                st.session_state['generated_sql'] = refined_sql
+                                st.session_state['edited_sql'] = refined_sql
+                                st.session_state['sql_needs_update'] = True  # Flag to update editor on next run
+                                st.success("Consulta refinada. Revisa los cambios arriba.")
+                                st.rerun()
+                            else:
+                                st.error(f"Error al refinar: {refine_resp.text}")
+                
+                with col_exec:
+                    if st.button("[ EXEC ] Ejecutar y Guardar Resultados"):
+                        # Use edited version if exists, otherwise use what's in the text area
+                        final_sql = st.session_state.get('edited_sql') or sql_to_run
+                        with st.spinner("[ TRANSMITTING TO BIGQUERY ... ]"):
+                            exec_resp = requests.post(
+                                f"{BACKEND_URL}/queries/execute", 
+                                params={"sql": final_sql, "target_table": target_table}
+                            )
+                            if exec_resp.status_code == 200:
+                                res = exec_resp.json()
+                                st.success(f"Éxito. Registros totales: {res['total_records']}")
+                                st.table(res['first_50'])
+                            else:
+                                st.error(f"Error de ejecución: {exec_resp.text}")
+                
+                # Option to save the query itself
+                st.divider()
+                st.subheader("[ SAVE ] Guardar Consulta")
+                query_name = st.text_input("Nombre de la consulta:", value="mi_consulta")
+                query_desc = st.text_input("Descripción:", value="Consulta generada automáticamente")
+                query_tags = st.text_input("Tags (comas):", value="")
+                
+                if st.button("[ 💾 ] Guardar Consulta en Catálogo"):
+                    tags_list = [t.strip() for t in query_tags.split(",") if t.strip()]
+                    # Use edited version if exists
+                    final_sql_to_save = st.session_state.get('edited_sql') or sql_to_run
+                    save_q_resp = requests.post(
+                        f"{BACKEND_URL}/queries/save",
+                        json={
+                            "name": query_name,
+                            "description": query_desc,
+                            "sql_query": final_sql_to_save,
+                            "tags": tags_list
+                        }
+                    )
+                    if save_q_resp.status_code == 200:
+                        st.success(f"Consulta '{query_name}' guardada exitosamente")
+                    else:
+                        st.error(f"Error al guardar consulta: {save_q_resp.text}")
 
 # Table Management Module
 elif "Tablas Registradas" in choice:
@@ -386,3 +478,158 @@ elif "Tablas Registradas" in choice:
                                     st.error("Error")
     else:
         st.error("Error cargando tablas")
+
+# Saved Queries Module
+elif "SAVE" in choice:
+    st.header("[ SAVE ] Gestión de Consultas Guardadas")
+    
+    with st.expander("[ + ] Crear Nueva Consulta Manual"):
+        with st.form("create_manual_query_form"):
+            new_q_name = st.text_input("Nombre de la consulta", placeholder="Ej: my_custom_query")
+            new_q_desc = st.text_input("Descripción", placeholder="Consulta ingresada manualmente")
+            new_q_tags_str = st.text_input("Tags (comas)", placeholder="manual, custom")
+            new_q_sql = st.text_area("SQL Query", placeholder="SELECT * FROM dataset.table LIMIT 50;", height=150)
+            
+            if st.form_submit_button("[ 💾 ] Guardar Consulta Manual"):
+                if new_q_name and new_q_sql:
+                    tags_list = [t.strip() for t in new_q_tags_str.split(",") if t.strip()]
+                    save_q_resp = requests.post(
+                        f"{BACKEND_URL}/queries/save",
+                        json={
+                            "name": new_q_name,
+                            "description": new_q_desc,
+                            "sql_query": new_q_sql,
+                            "tags": tags_list
+                        }
+                    )
+                    if save_q_resp.status_code == 200:
+                        st.success(f"Consulta '{new_q_name}' guardada exitosamente")
+                        st.rerun()
+                    else:
+                        st.error(f"Error al guardar consulta: {save_q_resp.text}")
+                else:
+                    st.warning("Por favor ingresa un nombre y la query SQL.")
+
+    queries_resp = requests.get(f"{BACKEND_URL}/queries")
+    if queries_resp.status_code == 200:
+        saved_queries = queries_resp.json()
+        if not saved_queries:
+            st.info("No hay consultas guardadas en el catálogo.")
+        else:
+            # Tag Filtering
+            all_tags = set()
+            for q in saved_queries:
+                for tag in (q.get('tags') or []):
+                    all_tags.add(tag)
+            
+            selected_filter_tags = st.multiselect("🏷️ Filtrar por Tags", options=sorted(list(all_tags)))
+            
+            if selected_filter_tags:
+                filtered_queries = [q for q in saved_queries if any(tag in (q.get('tags') or []) for tag in selected_filter_tags)]
+            else:
+                filtered_queries = saved_queries
+            
+            if not filtered_queries:
+                st.info("No hay consultas que coincidan.")
+            else:
+                if 'selected_query_id' not in st.session_state:
+                    st.session_state['selected_query_id'] = None
+                
+                # List View
+                if st.session_state['selected_query_id'] is None:
+                    # Deletion Confirmation logic
+                    if st.session_state.get('delete_query_confirm_id'):
+                        target_id = st.session_state['delete_query_confirm_id']
+                        q_to_del = next((q for q in saved_queries if q['id'] == target_id), None)
+                        if q_to_del:
+                            st.warning(f"¿Estás seguro de borrar la consulta '{q_to_del['name']}'?")
+                            cd1, cd2 = st.columns([1,1])
+                            if cd1.button("[ YES ] Confirmar Borrado", type="primary"):
+                                del_resp = requests.delete(f"{BACKEND_URL}/queries/{target_id}")
+                                if del_resp.status_code == 200:
+                                    st.success("Consulta eliminada")
+                                    st.session_state['delete_query_confirm_id'] = None
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error al borrar: {del_resp.text}")
+                            if cd2.button("[ NO ] Cancelar"):
+                                st.session_state['delete_query_confirm_id'] = None
+                                st.rerun()
+                        st.divider()
+                    
+                    st.write("Seleccione una consulta:")
+                    for q in filtered_queries:
+                        col1, col2, col3, col4 = st.columns([3, 5, 1, 1])
+                        col1.write(f"**{q['name']}**")
+                        desc = q.get('description', '')[:50] + "..." if q.get('description') and len(q['description']) > 50 else q.get('description', '')
+                        col2.write(f"_{desc}_")
+                        if col3.button("Detalles", key=f"btn_q_{q['id']}"):
+                            st.session_state['selected_query_id'] = q['id']
+                            st.rerun()
+                        if col4.button("🗑️", key=f"del_q_{q['id']}"):
+                            st.session_state['delete_query_confirm_id'] = q['id']
+                            st.rerun()
+                
+                # Detail View
+                else:
+                    if st.button("⬅️ Volver"):
+                        st.session_state['selected_query_id'] = None
+                        st.rerun()
+                    
+                    st.divider()
+                    selected_query = next((q for q in saved_queries if q['id'] == st.session_state['selected_query_id']), None)
+                    if selected_query:
+                        with st.form("edit_query_form"):
+                            new_name = st.text_input("Nombre", value=selected_query['name'])
+                            new_desc = st.text_area("Descripción", value=selected_query.get('description', ''), height=100)
+                            st.subheader("🧬 SQL Query")
+                            st.code(selected_query['sql_query'], language='sql')
+                            
+                            current_tags = selected_query.get('tags') or []
+                            new_tags_str = st.text_input("Tags (comas)", value=", ".join(current_tags))
+                            
+                            col_exec, col_save = st.columns(2)
+                            with col_exec:
+                                target_table = st.text_input("Tabla de resultados:", value=f"result_{selected_query['name']}")
+                            
+                            submitted = st.form_submit_button("Guardar Cambios")
+                            if submitted:
+                                new_tags = [tx.strip() for tx in new_tags_str.split(',') if tx.strip()]
+                                up_resp = requests.put(
+                                    f"{BACKEND_URL}/queries/{selected_query['id']}",
+                                    json={"name": new_name, "description": new_desc, "tags": new_tags}
+                                )
+                                if up_resp.status_code == 200:
+                                    st.success("Consulta actualizada")
+                                    st.session_state['selected_query_id'] = None
+                                    st.rerun()
+                                else:
+                                    st.error("Error al actualizar")
+                        
+                        # Load into Query Generator
+                        st.divider()
+                        if st.button("[ 🧠 ] Cargar en Generador de Consultas"):
+                            st.session_state['generated_sql'] = selected_query['sql_query']
+                            st.session_state['edited_sql'] = selected_query['sql_query']
+                            st.session_state['sql_needs_update'] = True
+                            st.session_state['selected_query_id'] = None
+                            # Set a flag to redirect to NEUR page
+                            st.session_state['redirect_to_neur'] = True
+                            st.rerun()
+                        
+                        # Execute saved query
+                        st.divider()
+                        if st.button("[ ▶️ ] Ejecutar Consulta en BigQuery"):
+                            with st.spinner("[ TRANSMITTING TO BIGQUERY ... ]"):
+                                exec_resp = requests.post(
+                                    f"{BACKEND_URL}/queries/execute",
+                                    params={"sql": selected_query['sql_query'], "target_table": target_table}
+                                )
+                                if exec_resp.status_code == 200:
+                                    res = exec_resp.json()
+                                    st.success(f"Éxito. Registros totales: {res['total_records']}")
+                                    st.table(res['first_50'])
+                                else:
+                                    st.error(f"Error de ejecución: {exec_resp.text}")
+    else:
+        st.error("Error cargando consultas guardadas")

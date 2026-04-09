@@ -29,6 +29,72 @@ class TableUpdate(BaseModel):
 class QueryRequest(BaseModel):
     prompt: str
 
+class QueryRefineRequest(BaseModel):
+    current_sql: str
+    additional_instructions: str
+
+class QuerySave(BaseModel):
+    name: str
+    description: str
+    sql_query: str
+    tags: List[str] = []
+
+class QueryUpdate(BaseModel):
+    name: str
+    description: str
+    tags: List[str] = []
+
+@app.get("/queries")
+def list_queries(db: Session = Depends(database.get_db)):
+    return db.query(models.SavedQuery).all()
+
+@app.post("/queries/save")
+def save_query(req: QuerySave, db: Session = Depends(database.get_db)):
+    try:
+        new_query = models.SavedQuery(
+            name=req.name,
+            description=req.description,
+            sql_query=req.sql_query,
+            tags=req.tags
+        )
+        db.add(new_query)
+        db.commit()
+        db.refresh(new_query)
+        return {"status": "success", "id": new_query.id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error saving query: {str(e)}")
+
+@app.put("/queries/{query_id}")
+def update_query(query_id: int, req: QueryUpdate, db: Session = Depends(database.get_db)):
+    query = db.query(models.SavedQuery).filter(models.SavedQuery.id == query_id).first()
+    if not query:
+        raise HTTPException(status_code=404, detail="Query not found")
+    
+    try:
+        query.name = req.name
+        query.description = req.description
+        query.tags = req.tags
+        db.commit()
+        db.refresh(query)
+        return {"status": "success", "message": "Consulta actualizada correctamente"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating query: {str(e)}")
+
+@app.delete("/queries/{query_id}")
+def delete_query(query_id: int, db: Session = Depends(database.get_db)):
+    query = db.query(models.SavedQuery).filter(models.SavedQuery.id == query_id).first()
+    if not query:
+        raise HTTPException(status_code=404, detail="Query not found")
+    
+    try:
+        db.delete(query)
+        db.commit()
+        return {"status": "success", "message": f"Consulta '{query.name}' eliminada correctamente"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error deleting query: {str(e)}")
 @app.get("/tables")
 def list_tables(db: Session = Depends(database.get_db)):
     return db.query(models.TableMetadata).all()
@@ -122,6 +188,21 @@ def generate_query(req: QueryRequest, db: Session = Depends(database.get_db)):
     sql = ai_service.generate_sql_query(req.prompt, catalog_list)
     return {"sql": sql}
 
+@app.post("/queries/refine")
+def refine_query(req: QueryRefineRequest, db: Session = Depends(database.get_db)):
+    catalog = db.query(models.TableMetadata).all()
+    catalog_list = [
+        {
+            "short_name": t.short_name, 
+            "description": t.description, 
+            "schema_json": t.schema_json,
+            "full_id": f"{t.project_id}.{t.dataset_id}.{t.table_id}"
+        }
+        for t in catalog
+    ]
+    sql = ai_service.refine_sql_query(req.current_sql, req.additional_instructions, catalog_list)
+    return {"sql": sql}
+
 @app.post("/queries/execute")
 def execute_ai_query(sql: str, target_table: str):
     try:
@@ -132,8 +213,8 @@ def execute_ai_query(sql: str, target_table: str):
         
         return {
             "total_records": row_count,
-            "first_5": df.head(5).to_dict(orient="records"),
-            "last_5": df.tail(5).to_dict(orient="records")
+            "first_50": df.head(50).to_dict(orient="records"),
+            "last_50": df.tail(50).to_dict(orient="records")
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
