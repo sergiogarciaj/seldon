@@ -7,55 +7,112 @@ import json
 
 st.set_page_config(page_title="Seldon", page_icon="logo.png", layout="wide")
 
-if os.path.exists("logo.png"):
-    st.logo("logo.png")
+# Removed st.logo to avoid double logo when using st.sidebar.image
 
 MATRIX_CSS = """
 <style>
-    /* Absolute transparency for all Streamlit layers */
+    /* Make everything transparent EXCEPT the sidebar and mobile header */
     div[data-testid="stAppViewContainer"], 
     .main, 
     .stApp, 
-    [data-testid="stHeader"],
     [data-testid="stAppViewBlockContainer"] {
         background: transparent !important;
     }
     
-    /* Ensure the body of the iframe is also transparent */
-    iframe {
+    /* Make the header fully transparent unconditionally */
+    [data-testid="stHeader"] {
         background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+    }
+    
+    @media (max-width: 768px) {
+        /* Color the mobile hamburger menu icon so it's visible over the matrix rain */
+        [data-testid="stHeader"] svg, [data-testid="stHeader"] button, [data-testid="stHeader"] span {
+            color: #00ff41 !important;
+            fill: #00ff41 !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }
+        /* Ensure the mobile menu toggle is visible */
+        [data-testid="collapsedControl"] {
+            display: block !important;
+            visibility: visible !important;
+        }
+        [data-testid="collapsedControl"] svg {
+            fill: #00ff41 !important;
+            color: #00ff41 !important;
+        }
     }
 
+    /* Surgical sidebar adjustments - NO BLUR, absolute solid black */
     [data-testid="stSidebar"] {
-        background: rgba(0, 20, 0, 0.9) !important;
+        background-color: #000000 !important;
+        background: #000000 !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
         border-right: 2px solid #00ff41 !important;
     }
     
-    .stMarkdown p, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, label, .stText {
+    [data-testid="stSidebar"] > div:first-child,
+    [data-testid="stSidebarHeader"],
+    [data-testid="stSidebarContent"],
+    [data-testid="stSidebarUserContent"],
+    [data-testid="stSidebarNav"] {
+        background-color: #000000 !important;
+        background: #000000 !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+    
+    /* RESTORED STYLING */
+    .stMarkdown p, h1, h2, h3, h4, h5, h6, label, .stText, 
+    div[role="radiogroup"] *, [data-baseweb="radio"] * {
         color: #00ff41 !important;
-        text-shadow: 0 0 5px #00ff41;
+        text-shadow: 0 0 2px #00ff41 !important; /* Gentle 2px glow without blur */
     }
     
-    [data-baseweb="input"], [data-baseweb="textarea"] {
-        background: black !important;
-        border-color: #00ff41 !important;
+    /* Inline Code Blocks (`code`) styling */
+    code {
+        background-color: transparent !important;
+        color: #00ff41 !important;
+        border: none !important;
+        text-shadow: none !important;
     }
     
-    [data-baseweb="input"] input, textarea {
+    /* Change default red/pink radio circle to matrix green */
+    div[data-testid="stSidebar"] div[role="radio"][aria-checked="true"] > div, 
+    div[role="radio"][aria-checked="true"] > div > div {
+        background-color: #00ff41 !important;
+    }
+    
+    /* Modern Streamlit Inputs */
+    div[data-testid="stTextInput"] input, 
+    div[data-testid="stTextArea"] textarea,
+    [data-baseweb="input"] input, 
+    [data-baseweb="textarea"] textarea {
+        background-color: #000000 !important;
         color: #00ff41 !important;
     }
     
-    [data-testid="baseButton-secondary"], [data-testid="baseButton-primary"] {
-        background: black !important;
+    div[data-testid="stTextInput"] div[data-baseweb="input"], 
+    div[data-testid="stTextArea"] div[data-baseweb="textarea"] {
+        background-color: #000000 !important;
+        border: 1px solid #00ff41 !important;
+    }
+    
+    /* Modern Streamlit Buttons */
+    button[kind="secondary"], button[kind="primary"], .stButton > button {
+        background-color: #000000 !important;
         border: 2px solid #00ff41 !important;
         color: #00ff41 !important;
         box-shadow: 0 0 10px #00ff41 !important;
         font-weight: bold !important;
     }
     
-    [data-testid="baseButton-secondary"]:hover, [data-testid="baseButton-primary"]:hover {
-        background: #00ff41 !important;
-        color: black !important;
+    button[kind="secondary"]:hover, button[kind="primary"]:hover, .stButton > button:hover {
+        background-color: #00ff41 !important;
+        color: #000000 !important;
     }
     
     [data-testid="stAlert"] {
@@ -64,27 +121,29 @@ MATRIX_CSS = """
         color: #00ff41 !important;
     }
     
-    [data-testid="stDataFrame"] {
+    [data-testid="stDataFrame"], [data-testid="stTable"] {
         border: 1px solid #00ff41 !important;
         background: black !important;
     }
-
-    /* Surgical sidebar adjustments */
-    [data-testid="stSidebarHeader"] {
-        display: none !important; /* Hide default Streamlit logo header to avoid icons text */
-    }
     
-    /* NEW: Hide Streamlit's internal menu and deploy button to clear top-right area */
-    header, [data-testid="stHeader"] {
-        visibility: hidden !important;
+    /* Force table alignment to fix header vs cell mismatch */
+    [data-testid="stTable"] th, [data-testid="stTable"] td {
+        text-align: center !important;
+        color: #00ff41 !important;
+        border-bottom: 1px dashed #00ff41 !important;
+    }
+    [data-testid="stTable"] th {
+        border-bottom: 2px solid #00ff41 !important;
+        font-weight: bold !important;
+    }
+
+    /* Only hide the noisy deploy buttons so we don't accidentally hide the mobile hamburger menu */
+    .stDeployButton,
+    .stAppDeployButton {
         display: none !important;
     }
     
     footer {
-        visibility: hidden !important;
-    }
-
-    #MainMenu {
         visibility: hidden !important;
     }
     
